@@ -1,0 +1,1304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jet Simulator</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #000;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Segoe UI', sans-serif;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+// ═══════════════════════════════════════════════════════════════════
+//  JET SIMULATOR – HTML5 Canvas Port
+// ═══════════════════════════════════════════════════════════════════
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+const WIDTH = 1400, HEIGHT = 900;
+canvas.width = WIDTH;
+canvas.height = HEIGHT;
+
+// Scale canvas to fit screen
+function resizeCanvas() {
+  const scaleX = window.innerWidth / WIDTH;
+  const scaleY = window.innerHeight / HEIGHT;
+  const scale = Math.min(scaleX, scaleY);
+  canvas.style.width = (WIDTH * scale) + 'px';
+  canvas.style.height = (HEIGHT * scale) + 'px';
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ── Colors ──
+const WHITE = '#fff', BLACK = '#000', RED = '#f00', GREEN = '#0f0';
+const BLUE = '#0064ff', YELLOW = '#ff0', ORANGE = '#ffa500', CYAN = '#0ff';
+const GRAY = '#808080', DARK = '#14141e', SKY_BLUE = '#87ceeb';
+
+// ── Input State ──
+const keys = {};
+const mouse = { x: 0, y: 0, left: false, right: false, dx: 0, dy: 0 };
+let pointerLocked = false;
+
+document.addEventListener('keydown', e => { keys[e.code] = true; e.preventDefault(); });
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = WIDTH / rect.width, sy = HEIGHT / rect.height;
+  mouse.x = (e.clientX - rect.left) * sx;
+  mouse.y = (e.clientY - rect.top) * sy;
+  if (pointerLocked) {
+    mouse.dx += e.movementX;
+    mouse.dy += e.movementY;
+  }
+});
+canvas.addEventListener('mousedown', e => {
+  if (e.button === 0) mouse.left = true;
+  if (e.button === 2) mouse.right = true;
+});
+canvas.addEventListener('mouseup', e => {
+  if (e.button === 0) mouse.left = false;
+  if (e.button === 2) mouse.right = false;
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// ── Helpers ──
+function drawText(text, x, y, color = WHITE, size = 32, align = 'left', baseline = 'top') {
+  ctx.fillStyle = color;
+  ctx.font = `bold ${size}px 'Segoe UI', sans-serif`;
+  ctx.textAlign = align;
+  ctx.textBaseline = baseline;
+  ctx.fillText(text, x, y);
+}
+
+function rectContains(rx, ry, rw, rh, px, py) {
+  return px >= rx && px <= rx + rw && py >= ry && py <= ry + rh;
+}
+
+function drawRoundRect(x, y, w, h, r, fill, stroke = null, lw = 2) {
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, h, r);
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); }
+}
+
+const now = () => performance.now() / 1000;
+
+// ═══════════════════════════════════════════════════════════════════
+//  STATE MACHINE
+// ═══════════════════════════════════════════════════════════════════
+let gameState = 'home'; // home, 2d, 3d
+let homeSelected = 0;
+let clickEvents = [];
+
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = WIDTH / rect.width, sy = HEIGHT / rect.height;
+  clickEvents.push({
+    x: (e.clientX - rect.left) * sx,
+    y: (e.clientY - rect.top) * sy
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  HOME SCREEN
+// ═══════════════════════════════════════════════════════════════════
+function drawHomeScreen() {
+  ctx.fillStyle = DARK;
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  const t = now();
+
+  // Animated grid
+  for (let i = 0; i < WIDTH; i += 70) {
+    const a = Math.floor(35 + 15 * Math.sin(t + i * 0.04));
+    ctx.strokeStyle = `rgb(0,${a},${a})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, HEIGHT); ctx.stroke();
+  }
+  for (let j = 0; j < HEIGHT; j += 70) {
+    const a = Math.floor(35 + 15 * Math.sin(t + j * 0.04));
+    ctx.strokeStyle = `rgb(0,${a},${a})`;
+    ctx.beginPath(); ctx.moveTo(0, j); ctx.lineTo(WIDTH, j); ctx.stroke();
+  }
+
+  // Pulsing title
+  const glow = Math.floor(180 + 60 * Math.sin(t * 1.5));
+  drawText('JET SIMULATOR', WIDTH / 2, 155, `rgb(${glow},255,255)`, 110, 'center', 'middle');
+  drawText('Choose Your Dimension', WIDTH / 2, 235, GRAY, 44, 'center', 'middle');
+
+  // 2D Button
+  const btn2d = { x: WIDTH / 2 - 340, y: 310, w: 300, h: 200 };
+  const sel2d = homeSelected === 0;
+  const hov2d = rectContains(btn2d.x, btn2d.y, btn2d.w, btn2d.h, mouse.x, mouse.y);
+  const lit2d = sel2d || hov2d;
+  drawRoundRect(btn2d.x, btn2d.y, btn2d.w, btn2d.h, 18,
+    lit2d ? 'rgb(0,130,70)' : 'rgb(0,70,35)',
+    sel2d ? YELLOW : (hov2d ? CYAN : GREEN), sel2d ? 4 : 2);
+  drawText('2D', btn2d.x + 150, btn2d.y + 70, WHITE, 80, 'center', 'middle');
+  drawText('Classic Dogfight', btn2d.x + 150, btn2d.y + 135, '#ccc', 26, 'center', 'middle');
+  drawText('WASD  |  Arrow Keys', btn2d.x + 150, btn2d.y + 165, GRAY, 24, 'center', 'middle');
+  if (sel2d) drawText('▶', btn2d.x - 30, btn2d.y + 100, YELLOW, 50, 'center', 'middle');
+
+  // 3D Button
+  const btn3d = { x: WIDTH / 2 + 40, y: 310, w: 300, h: 200 };
+  const sel3d = homeSelected === 1;
+  const hov3d = rectContains(btn3d.x, btn3d.y, btn3d.w, btn3d.h, mouse.x, mouse.y);
+  const lit3d = sel3d || hov3d;
+  drawRoundRect(btn3d.x, btn3d.y, btn3d.w, btn3d.h, 18,
+    lit3d ? 'rgb(0,70,180)' : 'rgb(0,35,100)',
+    sel3d ? YELLOW : (hov3d ? CYAN : BLUE), sel3d ? 4 : 2);
+  drawText('3D', btn3d.x + 150, btn3d.y + 70, WHITE, 80, 'center', 'middle');
+  drawText('3D Arena Combat', btn3d.x + 150, btn3d.y + 135, '#ccc', 26, 'center', 'middle');
+  drawText('Mouse  |  Split Screen', btn3d.x + 150, btn3d.y + 165, GRAY, 24, 'center', 'middle');
+  if (sel3d) drawText('▶', btn3d.x - 30, btn3d.y + 100, YELLOW, 50, 'center', 'middle');
+
+  drawText('← → Arrow Keys to select   ENTER to confirm   ESC to quit', WIDTH / 2, HEIGHT - 35, '#666', 24, 'center', 'middle');
+
+  // Handle input
+  for (const click of clickEvents) {
+    if (rectContains(btn2d.x, btn2d.y, btn2d.w, btn2d.h, click.x, click.y)) {
+      gameState = '2d'; init2D();
+    }
+    if (rectContains(btn3d.x, btn3d.y, btn3d.w, btn3d.h, click.x, click.y)) {
+      gameState = '3d'; init3D();
+    }
+  }
+}
+
+function handleHomeKeys(code) {
+  if (code === 'ArrowLeft' || code === 'ArrowRight') homeSelected = 1 - homeSelected;
+  if (code === 'Enter' || code === 'NumpadEnter') {
+    if (homeSelected === 0) { gameState = '2d'; init2D(); }
+    else { gameState = '3d'; init3D(); }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  2D GAME
+// ═══════════════════════════════════════════════════════════════════
+
+let game2D = {};
+
+class Jet2D {
+  constructor(x, y, color, isPlayer, playerId) {
+    this.x = x; this.y = y;
+    this.angle = isPlayer && playerId === 1 ? 0 : 180;
+    this.speed = 4; this.maxSpeed = 10; this.minSpeed = 2;
+    this.accel = 0.15; this.turnSpeed = 2.5;
+    this.missiles = 8; this.health = 100;
+    this.isPlayer = isPlayer; this.playerId = playerId;
+    this.color = color; this.cooldown = 0; this.gunAmmo = 200;
+  }
+  updateP1() {
+    if (keys['KeyA']) this.angle += this.turnSpeed;
+    if (keys['KeyD']) this.angle -= this.turnSpeed;
+    if (keys['KeyW']) this.speed = Math.min(this.speed + this.accel, this.maxSpeed);
+    if (keys['KeyS']) this.speed = Math.max(this.speed - this.accel, this.minSpeed);
+    this._move();
+  }
+  updateP2() {
+    if (keys['ArrowLeft'])  this.angle += this.turnSpeed;
+    if (keys['ArrowRight']) this.angle -= this.turnSpeed;
+    if (keys['ArrowUp'])    this.speed = Math.min(this.speed + this.accel, this.maxSpeed);
+    if (keys['ArrowDown'])  this.speed = Math.max(this.speed - this.accel, this.minSpeed);
+    this._move();
+  }
+  updateAI(target) {
+    const dx = target.x - this.x, dy = target.y - this.y;
+    let ta = Math.atan2(-dy, dx) * 180 / Math.PI;
+    let diff = ta - this.angle;
+    while (diff > 180) diff -= 360;
+    while (diff < -180) diff += 360;
+    if (Math.abs(diff) > 5) this.angle += this.turnSpeed * 0.8 * (diff > 0 ? 1 : -1);
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > 400) this.speed = Math.min(this.speed + this.accel, this.maxSpeed);
+    else if (dist < 200) this.speed = Math.max(this.speed - this.accel, this.minSpeed);
+    this._move();
+  }
+  _move() {
+    const rad = this.angle * Math.PI / 180;
+    this.x += Math.cos(rad) * this.speed;
+    this.y -= Math.sin(rad) * this.speed;
+    this.x = ((this.x % WIDTH) + WIDTH) % WIDTH;
+    this.y = ((this.y % HEIGHT) + HEIGHT) % HEIGHT;
+    if (this.cooldown > 0) this.cooldown--;
+  }
+  shootMissile() {
+    if (this.missiles > 0 && this.cooldown === 0) {
+      this.missiles--; this.cooldown = 60;
+      const rad = this.angle * Math.PI / 180;
+      return new Missile2D(this.x + Math.cos(rad) * 55, this.y - Math.sin(rad) * 55,
+        this.angle, this.speed + 8, this.playerId);
+    }
+    return null;
+  }
+  shootGun() {
+    if (this.gunAmmo > 0 && this.cooldown === 0) {
+      this.gunAmmo--; this.cooldown = 3;
+      const rad = this.angle * Math.PI / 180;
+      return new Bullet2D(this.x + Math.cos(rad) * 55, this.y - Math.sin(rad) * 55,
+        this.angle, this.speed + 15, this.playerId);
+    }
+    return null;
+  }
+  draw() {
+    const rad = this.angle * Math.PI / 180;
+    const nx = this.x + Math.cos(rad) * 50, ny = this.y - Math.sin(rad) * 50;
+    const lx = this.x + Math.cos(rad + 2.3) * 40, ly = this.y - Math.sin(rad + 2.3) * 40;
+    const rx = this.x + Math.cos(rad - 2.3) * 40, ry = this.y - Math.sin(rad - 2.3) * 40;
+    const tx = this.x - Math.cos(rad) * 25, ty = this.y + Math.sin(rad) * 25;
+
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.moveTo(nx, ny); ctx.lineTo(lx, ly); ctx.lineTo(tx, ty); ctx.lineTo(rx, ry);
+    ctx.closePath(); ctx.fill();
+
+    // Cockpit
+    ctx.fillStyle = this.isPlayer && this.playerId === 1 ? '#3296c8' : '#c83232';
+    ctx.beginPath(); ctx.arc(this.x, this.y, 10, 0, Math.PI * 2); ctx.fill();
+
+    // Health bar
+    const bw = 70, hw = Math.floor((this.health / 100) * bw);
+    const bx = this.x - bw / 2, by = this.y - 55;
+    ctx.fillStyle = RED; ctx.fillRect(bx, by, bw, 8);
+    ctx.fillStyle = GREEN; ctx.fillRect(bx, by, hw, 8);
+  }
+}
+
+class Missile2D {
+  constructor(x, y, angle, speed, pid) {
+    this.x = x; this.y = y; this.angle = angle; this.speed = speed;
+    this.life = 180; this.playerId = pid; this.turnRate = 1.5;
+  }
+  update(target) {
+    if (target && this.life > 0) {
+      const dx = target.x - this.x, dy = target.y - this.y;
+      let ta = Math.atan2(-dy, dx) * 180 / Math.PI;
+      let diff = ta - this.angle;
+      while (diff > 180) diff -= 360;
+      while (diff < -180) diff += 360;
+      if (Math.abs(diff) > 2) this.angle += this.turnRate * (diff > 0 ? 1 : -1);
+    }
+    const rad = this.angle * Math.PI / 180;
+    this.x += Math.cos(rad) * this.speed;
+    this.y -= Math.sin(rad) * this.speed;
+    this.life--;
+    if (this.x < -100 || this.x > WIDTH + 100 || this.y < -100 || this.y > HEIGHT + 100) this.life = 0;
+  }
+  draw() {
+    const col = this.playerId === 1 ? BLUE : RED;
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(this.x, this.y, 7, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = YELLOW;
+    ctx.beginPath(); ctx.arc(this.x, this.y, 3, 0, Math.PI * 2); ctx.fill();
+    // Trail
+    const rad = this.angle * Math.PI / 180;
+    for (let i = 0; i < 4; i++) {
+      const tx = this.x - Math.cos(rad) * (i * 10);
+      const ty = this.y + Math.sin(rad) * (i * 10);
+      ctx.fillStyle = ORANGE;
+      ctx.beginPath(); ctx.arc(tx, ty, Math.max(1, 5 - i), 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  hit(jet) { return Math.sqrt((this.x - jet.x) ** 2 + (this.y - jet.y) ** 2) < 35; }
+}
+
+class Bullet2D {
+  constructor(x, y, angle, speed, pid) {
+    this.x = x; this.y = y; this.sx = x; this.sy = y;
+    this.angle = angle; this.speed = speed; this.life = 60;
+    this.playerId = pid; this.tracerLife = 15;
+  }
+  update() {
+    const rad = this.angle * Math.PI / 180;
+    this.x += Math.cos(rad) * this.speed;
+    this.y -= Math.sin(rad) * this.speed;
+    this.life--; this.tracerLife--;
+    if (this.x < -50 || this.x > WIDTH + 50 || this.y < -50 || this.y > HEIGHT + 50) this.life = 0;
+  }
+  draw() {
+    const col = this.playerId === 1 ? BLUE : RED;
+    if (this.tracerLife > 0) {
+      ctx.strokeStyle = col; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(this.sx, this.sy); ctx.lineTo(this.x, this.y); ctx.stroke();
+    }
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(this.x, this.y, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = YELLOW;
+    ctx.beginPath(); ctx.arc(this.x, this.y, 2, 0, Math.PI * 2); ctx.fill();
+  }
+  hit(jet) { return Math.sqrt((this.x - jet.x) ** 2 + (this.y - jet.y) ** 2) < 30; }
+}
+
+class Explosion2D {
+  constructor(x, y) { this.x = x; this.y = y; this.frame = 0; this.maxFrames = 30; }
+  update() { this.frame++; }
+  draw() {
+    if (this.frame < this.maxFrames) {
+      const r = this.frame * 3;
+      const g = Math.max(0, 200 - this.frame * 5);
+      ctx.strokeStyle = `rgb(255,${g},0)`; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(this.x, this.y, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = ORANGE;
+      ctx.beginPath(); ctx.arc(this.x, this.y, r / 2, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+}
+
+class MuzzleFlash2D {
+  constructor(x, y, angle) { this.x = x; this.y = y; this.angle = angle; this.frame = 0; }
+  update() { this.frame++; }
+  draw() {
+    if (this.frame < 3) {
+      const rad = this.angle * Math.PI / 180;
+      const fx = this.x + Math.cos(rad) * 10, fy = this.y - Math.sin(rad) * 10;
+      const s = 8 - this.frame * 2;
+      ctx.fillStyle = YELLOW;
+      ctx.beginPath(); ctx.arc(fx, fy, s, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = WHITE;
+      ctx.beginPath(); ctx.arc(fx, fy, s / 2, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+}
+
+function init2D() {
+  game2D = {
+    state: 'menu', // menu, playing, gameover, replay
+    mode: null,    // single, multi
+    menuSel: 0, goSel: 0,
+    p1: null, p2: null,
+    missiles: [], bullets: [], explosions: [], flashes: [],
+    winner: null,
+    replayFrames: [], replayMode: false, replayIndex: 0, replayCounter: 0
+  };
+  resetJets2D();
+}
+
+function resetJets2D() {
+  game2D.p1 = new Jet2D(200, HEIGHT / 2, BLUE, true, 1);
+  game2D.p2 = new Jet2D(WIDTH - 200, HEIGHT / 2, RED, true, 2);
+  game2D.p2.angle = 180;
+  game2D.missiles = []; game2D.bullets = [];
+  game2D.explosions = []; game2D.flashes = [];
+  game2D.replayFrames = []; game2D.replayMode = false;
+  game2D.replayIndex = 0; game2D.replayCounter = 0;
+}
+
+function draw2DMenu() {
+  ctx.fillStyle = SKY_BLUE; ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  // Clouds
+  for (let i = 0; i < 8; i++) {
+    const x = (i * 250) % WIDTH, y = 80 + (i * 80) % 600;
+    ctx.fillStyle = WHITE;
+    ctx.beginPath(); ctx.ellipse(x + 50, y + 20, 50, 20, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(x + 80, y + 10, 50, 20, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  // Title
+  drawText('JET SIMULATOR', WIDTH / 2 + 4, 204, BLACK, 100, 'center', 'middle');
+  drawText('JET SIMULATOR', WIDTH / 2, 200, WHITE, 100, 'center', 'middle');
+  drawText('DOGFIGHT SIMULATOR', WIDTH / 2, 280, YELLOW, 52, 'center', 'middle');
+
+  const g = game2D;
+  const sp = { x: WIDTH / 2 - 200, y: 400, w: 400, h: 80 };
+  const mp = { x: WIDTH / 2 - 200, y: 550, w: 400, h: 80 };
+
+  for (const [idx, btn, label, baseCol, hiCol] of [
+    [0, sp, 'SINGLE PLAYER', 'rgb(50,100,200)', BLUE],
+    [1, mp, 'MULTIPLAYER', 'rgb(200,50,50)', RED]
+  ]) {
+    const sel = g.menuSel === idx;
+    const hov = rectContains(btn.x, btn.y, btn.w, btn.h, mouse.x, mouse.y);
+    const lit = sel || hov;
+    drawRoundRect(btn.x, btn.y, btn.w, btn.h, 10,
+      lit ? hiCol : baseCol, sel ? YELLOW : WHITE, sel ? 4 : 3);
+    drawText(label, btn.x + btn.w / 2, btn.y + btn.h / 2, WHITE, 44, 'center', 'middle');
+    if (sel) drawText('▶', btn.x - 35, btn.y + btn.h / 2, YELLOW, 44, 'center', 'middle');
+  }
+  drawText('Fight against AI', WIDTH / 2, 495, WHITE, 26, 'center', 'middle');
+  drawText('Local 2-Player', WIDTH / 2, 645, WHITE, 26, 'center', 'middle');
+  drawText('↑ ↓ Arrow Keys  |  ENTER  |  ESC = Back to Home', WIDTH / 2, HEIGHT - 45, WHITE, 24, 'center', 'middle');
+
+  // Click handling
+  for (const click of clickEvents) {
+    if (rectContains(sp.x, sp.y, sp.w, sp.h, click.x, click.y)) {
+      g.mode = 'single'; g.state = 'playing'; resetJets2D();
+    }
+    if (rectContains(mp.x, mp.y, mp.w, mp.h, click.x, click.y)) {
+      g.mode = 'multi'; g.state = 'playing'; resetJets2D();
+    }
+  }
+}
+
+function draw2DHUD() {
+  const g = game2D;
+  const { p1, p2 } = g;
+  // P1 HUD
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(5, 5, 280, 180);
+  drawText(`Speed: ${Math.floor(p1.speed * 50)} kts`, 10, 10, WHITE, 28);
+  drawText(`Missiles: ${p1.missiles}`, 10, 45, YELLOW, 28);
+  drawText(`Gun Ammo: ${p1.gunAmmo}`, 10, 80, ORANGE, 28);
+  drawText(`Health: ${p1.health}%`, 10, 115, p1.health > 50 ? GREEN : RED, 28);
+  drawText(g.mode === 'multi' ? 'PLAYER 1 (BLUE)' : 'PLAYER (BLUE)', 10, 150, BLUE, 22);
+
+  // P2 HUD
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(WIDTH - 285, 5, 280, 180);
+  drawText(`Speed: ${Math.floor(p2.speed * 50)} kts`, WIDTH - 280, 10, WHITE, 28);
+  drawText(`Missiles: ${p2.missiles}`, WIDTH - 280, 45, YELLOW, 28);
+  drawText(`Gun Ammo: ${p2.gunAmmo}`, WIDTH - 280, 80, ORANGE, 28);
+  drawText(`Health: ${p2.health}%`, WIDTH - 280, 115, p2.health > 50 ? GREEN : RED, 28);
+  drawText(g.mode === 'multi' ? 'PLAYER 2 (RED)' : 'AI ENEMY (RED)', WIDTH - 280, 150, RED, 22);
+
+  // Distance
+  const dist = Math.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2);
+  drawText(`Distance: ${Math.floor(dist)}m`, WIDTH / 2, 20, WHITE, 22, 'center');
+
+  // Controls
+  if (g.mode === 'multi') {
+    drawText('PLAYER 1: WASD = Move | E = Gun | Q = Missile', WIDTH / 2, HEIGHT - 60, BLUE, 22, 'center');
+    drawText('PLAYER 2: Arrows = Move | Left Click = Gun | Right Click = Missile', WIDTH / 2, HEIGHT - 30, RED, 22, 'center');
+  } else {
+    drawText('WASD = Move | E = Gun | Q = Missile | ESC = Back to Home', WIDTH / 2, HEIGHT - 35, BLUE, 22, 'center');
+  }
+}
+
+function draw2DGameOver() {
+  const g = game2D;
+  ctx.fillStyle = 'rgba(0,0,0,0.78)'; ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  if (g.mode === 'multi') {
+    const msg = g.winner === 'player1' ? 'PLAYER 1 WINS!' : 'PLAYER 2 WINS!';
+    const col = g.winner === 'player1' ? BLUE : RED;
+    drawText(msg, WIDTH / 2, HEIGHT / 2 - 100, col, 90, 'center', 'middle');
+    const sub = g.winner === 'player1' ? 'Player 2 Shot Down!' : 'Player 1 Shot Down!';
+    drawText(sub, WIDTH / 2, HEIGHT / 2 - 20, WHITE, 44, 'center', 'middle');
+  } else {
+    const win = g.winner === 'player1';
+    drawText(win ? 'VICTORY!' : 'DEFEATED!', WIDTH / 2, HEIGHT / 2 - 100,
+      win ? GREEN : RED, 90, 'center', 'middle');
+    drawText(win ? 'Enemy AI Destroyed!' : 'You Were Shot Down', WIDTH / 2, HEIGHT / 2 - 20,
+      WHITE, 44, 'center', 'middle');
+  }
+
+  const rb = { x: WIDTH / 2 - 310, y: HEIGHT / 2 + 80, w: 260, h: 65 };
+  const mb = { x: WIDTH / 2 + 50, y: HEIGHT / 2 + 80, w: 260, h: 65 };
+
+  for (const [idx, btn, label, baseCol, hiCol] of [
+    [0, rb, 'RESTART', 'rgb(50,150,50)', GREEN],
+    [1, mb, 'MENU', 'rgb(50,100,200)', BLUE]
+  ]) {
+    const sel = g.goSel === idx;
+    const hov = rectContains(btn.x, btn.y, btn.w, btn.h, mouse.x, mouse.y);
+    const lit = sel || hov;
+    drawRoundRect(btn.x, btn.y, btn.w, btn.h, 10,
+      lit ? hiCol : baseCol, sel ? YELLOW : WHITE, sel ? 4 : 3);
+    drawText(label, btn.x + btn.w / 2, btn.y + btn.h / 2, WHITE, 42, 'center', 'middle');
+    if (sel) drawText('▶', btn.x - 25, btn.y + btn.h / 2, YELLOW, 42, 'center', 'middle');
+  }
+  drawText('← → Arrow Keys  |  ENTER to confirm', WIDTH / 2, HEIGHT / 2 + 175, GRAY, 24, 'center', 'middle');
+
+  for (const click of clickEvents) {
+    if (rectContains(rb.x, rb.y, rb.w, rb.h, click.x, click.y)) {
+      g.state = 'playing'; g.winner = null; resetJets2D();
+    }
+    if (rectContains(mb.x, mb.y, mb.w, mb.h, click.x, click.y)) {
+      g.state = 'menu'; g.winner = null;
+    }
+  }
+}
+
+function update2D() {
+  const g = game2D;
+
+  if (g.state === 'menu') { draw2DMenu(); return; }
+
+  // ── Update logic ──
+  if (g.state === 'playing' && !g.replayMode) {
+    // Store replay frame
+    g.replayFrames.push({
+      p1x: g.p1.x, p1y: g.p1.y, p1a: g.p1.angle, p1h: g.p1.health,
+      p2x: g.p2.x, p2y: g.p2.y, p2a: g.p2.angle, p2h: g.p2.health,
+      missiles: g.missiles.map(m => ({ x: m.x, y: m.y, a: m.angle, pid: m.playerId })),
+      bullets: g.bullets.map(b => ({ x: b.x, y: b.y, a: b.angle, pid: b.playerId }))
+    });
+    if (g.replayFrames.length > 90) g.replayFrames.shift();
+
+    g.p1.updateP1();
+    if (g.mode === 'multi') {
+      g.p2.updateP2();
+    } else {
+      g.p2.updateAI(g.p1);
+      const dx = g.p1.x - g.p2.x, dy = g.p1.y - g.p2.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      let ta = Math.atan2(-dy, dx) * 180 / Math.PI;
+      let diff = ta - g.p2.angle;
+      while (diff > 180) diff -= 360;
+      while (diff < -180) diff += 360;
+      if (Math.random() < 0.015 && dist < 500 && Math.abs(diff) < 20) {
+        const m = g.p2.shootMissile(); if (m) g.missiles.push(m);
+      } else if (Math.random() < 0.08 && dist < 350 && Math.abs(diff) < 15) {
+        const b = g.p2.shootGun(); if (b) g.bullets.push(b);
+      }
+    }
+
+    // Collision checks
+    const checkHit = (proj, target, dmg) => {
+      if (proj.hit(target)) {
+        target.health = Math.max(0, target.health - dmg);
+        g.explosions.push(new Explosion2D(proj.x, proj.y));
+        if (target.health <= 0) {
+          g.replayMode = true; g.replayIndex = 0;
+          g.winner = target.playerId === 2 ? 'player1' : 'player2';
+          g.explosions.push(new Explosion2D(target.x, target.y));
+        }
+        return true;
+      }
+      return false;
+    };
+
+    g.missiles = g.missiles.filter(m => {
+      m.update(m.playerId === 1 ? g.p2 : g.p1);
+      if (m.life <= 0) return false;
+      if (m.playerId === 1 && checkHit(m, g.p2, 35)) return false;
+      if (m.playerId === 2 && checkHit(m, g.p1, 35)) return false;
+      return true;
+    });
+
+    g.bullets = g.bullets.filter(b => {
+      b.update();
+      if (b.life <= 0) return false;
+      if (b.playerId === 1 && checkHit(b, g.p2, 5)) return false;
+      if (b.playerId === 2 && checkHit(b, g.p1, 5)) return false;
+      return true;
+    });
+  }
+
+  // Replay mode
+  if (g.replayMode && g.replayFrames.length > 0) {
+    g.replayCounter++;
+    if (g.replayCounter >= 2) {
+      g.replayCounter = 0; g.replayIndex++;
+      if (g.replayIndex >= g.replayFrames.length) {
+        g.replayMode = false; g.state = 'gameover';
+      } else {
+        const fr = g.replayFrames[g.replayIndex];
+        g.p1.x = fr.p1x; g.p1.y = fr.p1y; g.p1.angle = fr.p1a; g.p1.health = fr.p1h;
+        g.p2.x = fr.p2x; g.p2.y = fr.p2y; g.p2.angle = fr.p2a; g.p2.health = fr.p2h;
+        g.missiles = fr.missiles.map(m => {
+          const ms = new Missile2D(m.x, m.y, m.a, 0, m.pid); return ms;
+        });
+        g.bullets = fr.bullets.map(b => {
+          const bl = new Bullet2D(b.x, b.y, b.a, 0, b.pid); return bl;
+        });
+      }
+    }
+  }
+
+  // Update particles
+  g.explosions = g.explosions.filter(e => { e.update(); return e.frame < e.maxFrames; });
+  g.flashes = g.flashes.filter(f => { f.update(); return f.frame < 3; });
+
+  // ── Draw ──
+  ctx.fillStyle = SKY_BLUE; ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  // Clouds
+  const tick = now() * 30;
+  for (let i = 0; i < 8; i++) {
+    const x = ((i * 250 + tick) % WIDTH); const y = 80 + (i * 80) % 600;
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.beginPath(); ctx.ellipse(x + 50, y + 20, 50, 20, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(x + 80, y + 10, 50, 20, 0, 0, Math.PI * 2); ctx.fill();
+  }
+
+  for (const e of g.explosions) e.draw();
+  for (const f of g.flashes) f.draw();
+  for (const m of g.missiles) m.draw();
+  for (const b of g.bullets) b.draw();
+  if (g.state !== 'gameover' || g.winner === 'player1') g.p2.draw();
+  if (g.state !== 'gameover' || g.winner === 'player2') g.p1.draw();
+
+  if (g.replayMode) {
+    draw2DHUD();
+    drawText('REPLAY', WIDTH / 2 + 3, 103, BLACK, 100, 'center', 'middle');
+    drawText('REPLAY', WIDTH / 2, 100, RED, 100, 'center', 'middle');
+    drawText('SLOW MOTION', WIDTH / 2, 170, WHITE, 36, 'center', 'middle');
+  } else if (g.state === 'playing') {
+    draw2DHUD();
+  } else if (g.state === 'gameover') {
+    draw2DGameOver();
+  }
+}
+
+function handle2DKeys(code) {
+  const g = game2D;
+  if (g.state === 'menu') {
+    if (code === 'ArrowUp' || code === 'ArrowDown') g.menuSel = 1 - g.menuSel;
+    if (code === 'Enter' || code === 'NumpadEnter') {
+      g.mode = g.menuSel === 0 ? 'single' : 'multi';
+      g.state = 'playing'; resetJets2D();
+    }
+    if (code === 'Escape') { gameState = 'home'; }
+  } else if (g.state === 'gameover' && !g.replayMode) {
+    if (code === 'ArrowLeft' || code === 'ArrowRight') g.goSel = 1 - g.goSel;
+    if (code === 'Enter' || code === 'NumpadEnter') {
+      if (g.goSel === 0) { g.state = 'playing'; g.winner = null; resetJets2D(); }
+      else { g.state = 'menu'; g.winner = null; }
+    }
+    if (code === 'Escape') { g.state = 'menu'; g.winner = null; }
+  } else if (g.state === 'playing' && !g.replayMode) {
+    if (code === 'Escape') { g.state = 'menu'; g.winner = null; g.replayMode = false; }
+    if (code === 'KeyE') {
+      const b = g.p1.shootGun();
+      if (b) { g.bullets.push(b); g.flashes.push(new MuzzleFlash2D(g.p1.x, g.p1.y, g.p1.angle)); }
+    }
+    if (code === 'KeyQ') {
+      const m = g.p1.shootMissile(); if (m) g.missiles.push(m);
+    }
+  }
+}
+
+function handle2DMouseDown(button) {
+  const g = game2D;
+  if (g.state === 'playing' && !g.replayMode && g.mode === 'multi') {
+    if (button === 0) {
+      const b = g.p2.shootGun();
+      if (b) { g.bullets.push(b); g.flashes.push(new MuzzleFlash2D(g.p2.x, g.p2.y, g.p2.angle)); }
+    }
+    if (button === 2) {
+      const m = g.p2.shootMissile(); if (m) g.missiles.push(m);
+    }
+  }
+}
+
+canvas.addEventListener('mousedown', e => {
+  if (gameState === '2d') handle2DMouseDown(e.button);
+  if (gameState === '3d') handle3DMouseDown(e.button);
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  3D GAME
+// ═══════════════════════════════════════════════════════════════════
+
+let game3D = {};
+const ARENA = 2000, CEILING = 900, HALF_W = WIDTH / 2;
+const B_BLUE = '#6496ff', B_RED = '#ff0000';
+
+function rotate3D(x, y, z, pitch, yaw, roll) {
+  let cy = Math.cos(yaw), sy = Math.sin(yaw);
+  let nx = x * cy - z * sy, nz = x * sy + z * cy;
+  x = nx; z = nz;
+  let cp = Math.cos(pitch), sp = Math.sin(pitch);
+  let ny = y * cp - z * sp; nz = y * sp + z * cp;
+  y = ny; z = nz;
+  let cr = Math.cos(roll), sr = Math.sin(roll);
+  nx = x * cr - y * sr; ny = x * sr + y * cr;
+  return [nx, ny, z];
+}
+
+function project3D(x, y, z, cx, cy, cz, cp, cyw, cr, sw, sh) {
+  x -= cx; y -= cy; z -= cz;
+  [x, y, z] = rotate3D(x, y, z, cp, cyw, cr);
+  if (z <= 0.5) return null;
+  const sc = 500 / z;
+  return [sw / 2 + x * sc, sh / 2 - y * sc, sc, z];
+}
+
+function drawGridQuad(offCtx, color, pts, sw, sh) {
+  if (!pts.every(p => p)) return;
+  const coords = pts.map(p => [p[0], p[1]]);
+  if (!coords.some(p => p[0] >= 0 && p[0] < sw && p[1] >= 0 && p[1] < sh)) return;
+  offCtx.fillStyle = color;
+  offCtx.beginPath();
+  offCtx.moveTo(coords[0][0], coords[0][1]);
+  for (let i = 1; i < coords.length; i++) offCtx.lineTo(coords[i][0], coords[i][1]);
+  offCtx.closePath(); offCtx.fill();
+  offCtx.strokeStyle = GRAY; offCtx.lineWidth = 1; offCtx.stroke();
+}
+
+function drawArena(offCtx, cx, cy, cz, cpitch, cyaw, croll, sw, sh) {
+  const G = 400;
+  const p4 = (corners) => corners.map(([x, y, z]) => project3D(x, y, z, cx, cy, cz, cpitch, cyaw, croll, sw, sh));
+  const col = (a, b) => (a + b) % 2 === 0 ? '#fff' : '#000';
+
+  // Only render nearby grid cells for performance
+  const maxCells = 5;
+  const startX = Math.max(-ARENA, Math.floor((cx - ARENA) / G) * G);
+  const endX = Math.min(ARENA, Math.ceil((cx + ARENA) / G) * G);
+  const startZ = Math.max(-ARENA, Math.floor((cz - ARENA) / G) * G);
+  const endZ = Math.min(ARENA, Math.ceil((cz + ARENA) / G) * G);
+
+  for (let x = startX; x < endX; x += G) {
+    for (let z = startZ; z < endZ; z += G) {
+      const xi = Math.floor((x + ARENA) / G), zi = Math.floor((z + ARENA) / G);
+      // Floor
+      drawGridQuad(offCtx, col(xi, zi), p4([[x, 0, z], [x + G, 0, z], [x + G, 0, z + G], [x, 0, z + G]]), sw, sh);
+      // Ceiling
+      drawGridQuad(offCtx, col(xi, zi), p4([[x, CEILING, z], [x + G, CEILING, z], [x + G, CEILING, z + G], [x, CEILING, z + G]]), sw, sh);
+    }
+  }
+  // Walls (simplified - only nearby)
+  for (let x = startX; x < endX; x += G) {
+    for (let y = 0; y < CEILING; y += G) {
+      const xi = Math.floor((x + ARENA) / G), yi = Math.floor(y / G);
+      drawGridQuad(offCtx, col(xi, yi), p4([[x, y, ARENA], [x + G, y, ARENA], [x + G, y + G, ARENA], [x, y + G, ARENA]]), sw, sh);
+      drawGridQuad(offCtx, col(xi, yi), p4([[x, y, -ARENA], [x + G, y, -ARENA], [x + G, y + G, -ARENA], [x, y + G, -ARENA]]), sw, sh);
+    }
+  }
+  for (let z = startZ; z < endZ; z += G) {
+    for (let y = 0; y < CEILING; y += G) {
+      const zi = Math.floor((z + ARENA) / G), yi = Math.floor(y / G);
+      drawGridQuad(offCtx, col(zi, yi), p4([[ARENA, y, z], [ARENA, y, z + G], [ARENA, y + G, z + G], [ARENA, y + G, z]]), sw, sh);
+      drawGridQuad(offCtx, col(zi, yi), p4([[-ARENA, y, z], [-ARENA, y, z + G], [-ARENA, y + G, z + G], [-ARENA, y + G, z]]), sw, sh);
+    }
+  }
+}
+
+class Jet3D {
+  constructor(x, y, z, color, pid) {
+    this.x = x; this.y = y; this.z = z;
+    this.pitch = 0; this.yaw = pid === 1 ? 0 : Math.PI; this.roll = 0;
+    this.speed = 8; this.color = color; this.playerId = pid;
+    this.health = 100; this.missiles = 8; this.gunAmmo = 200; this.cooldown = 0;
+  }
+  updateP1() {
+    if (keys['KeyW']) this.pitch += 0.035;
+    if (keys['KeyS']) this.pitch -= 0.035;
+    if (keys['KeyA']) this.yaw -= 0.035;
+    if (keys['KeyD']) this.yaw += 0.035;
+    if (keys['ShiftLeft']) this.speed = Math.min(this.speed + 0.3, 20);
+    if (keys['ControlLeft']) this.speed = Math.max(this.speed - 0.3, 4);
+    this._move();
+  }
+  updateP2Keys() {
+    if (keys['ArrowUp']) this.pitch += 0.035;
+    if (keys['ArrowDown']) this.pitch -= 0.035;
+    if (keys['ArrowLeft']) this.yaw -= 0.035;
+    if (keys['ArrowRight']) this.yaw += 0.035;
+    if (keys['ShiftRight']) this.speed = Math.min(this.speed + 0.3, 20);
+    if (keys['ControlRight']) this.speed = Math.max(this.speed - 0.3, 4);
+    this._move();
+  }
+  updateMouse(mdx, mdy) {
+    this.yaw += mdx * 0.003;
+    this.pitch -= mdy * 0.003;
+    if (keys['ShiftLeft'] || keys['ShiftRight']) this.speed = Math.min(this.speed + 0.3, 20);
+    if (keys['ControlLeft'] || keys['ControlRight']) this.speed = Math.max(this.speed - 0.3, 4);
+    this._move();
+  }
+  _move() {
+    let nx = this.x + this.speed * Math.sin(this.yaw) * Math.cos(this.pitch);
+    let ny = this.y + this.speed * Math.sin(this.pitch);
+    let nz = this.z + this.speed * Math.cos(this.yaw) * Math.cos(this.pitch);
+    if (Math.abs(nx) > ARENA - 20) nx = (ARENA - 20) * Math.sign(nx);
+    if (Math.abs(nz) > ARENA - 20) nz = (ARENA - 20) * Math.sign(nz);
+    this.x = nx; this.y = Math.max(20, Math.min(CEILING - 20, ny)); this.z = nz;
+    this.pitch = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, this.pitch));
+    if (this.cooldown > 0) this.cooldown--;
+  }
+  fireMissile() {
+    if (this.missiles > 0 && this.cooldown === 0) {
+      this.missiles--; this.cooldown = 55;
+      const d = 55;
+      return new Missile3D(
+        this.x + d * Math.sin(this.yaw) * Math.cos(this.pitch),
+        this.y + d * Math.sin(this.pitch),
+        this.z + d * Math.cos(this.yaw) * Math.cos(this.pitch),
+        this.pitch, this.yaw, this.speed, this.playerId);
+    }
+    return null;
+  }
+  fireGun() {
+    if (this.gunAmmo > 0 && this.cooldown === 0) {
+      this.gunAmmo--; this.cooldown = 3;
+      const d = 55;
+      return new Bullet3D(
+        this.x + d * Math.sin(this.yaw) * Math.cos(this.pitch),
+        this.y + d * Math.sin(this.pitch),
+        this.z + d * Math.cos(this.yaw) * Math.cos(this.pitch),
+        this.pitch, this.yaw, this.speed, this.playerId);
+    }
+    return null;
+  }
+  draw(offCtx, cx, cy, cz, cp, cyw, cr, sw, sh) {
+    const parts = [
+      [[0,0,40],[-22,0,-10],[22,0,-10]],
+      [[0,0,40],[-22,0,-10],[0,-6,-10]],
+      [[0,0,40],[22,0,-10],[0,-6,-10]],
+      [[-22,0,-10],[22,0,-10],[0,-6,-10]],
+      [[0,0,40],[0,10,-10],[-22,0,-10]],
+      [[0,0,40],[0,10,-10],[22,0,-10]],
+      [[0,0,-28],[-22,0,-10],[22,0,-10]],
+      [[0,0,-28],[0,10,-10],[0,-6,-10]]
+    ];
+    const shade = [1.0, 0.6, 0.6, 0.5, 0.8, 0.8, 0.7, 0.9];
+
+    for (let i = 0; i < parts.length; i++) {
+      const proj = [];
+      for (const v of parts[i]) {
+        const [rx, ry, rz] = rotate3D(v[0], v[1], v[2], this.pitch, this.yaw, this.roll);
+        const p = project3D(rx + this.x, ry + this.y, rz + this.z, cx, cy, cz, cp, cyw, cr, sw, sh);
+        if (!p) { proj.length = 0; break; }
+        proj.push(p);
+      }
+      if (proj.length < 3) continue;
+
+      const f = shade[i];
+      // Parse color
+      const r = parseInt(this.color.slice(1, 3) || this.color.match(/\d+/g)?.[0] || '100', 16);
+      const g = parseInt(this.color.slice(3, 5) || '150', 16);
+      const b = parseInt(this.color.slice(5, 7) || '255', 16);
+      offCtx.fillStyle = `rgb(${Math.floor(r*f)},${Math.floor(g*f)},${Math.floor(b*f)})`;
+      offCtx.beginPath();
+      offCtx.moveTo(proj[0][0], proj[0][1]);
+      offCtx.lineTo(proj[1][0], proj[1][1]);
+      offCtx.lineTo(proj[2][0], proj[2][1]);
+      offCtx.closePath(); offCtx.fill();
+      offCtx.strokeStyle = `rgb(${Math.min(255,Math.floor(r*1.3))},${Math.min(255,Math.floor(g*1.3))},${Math.min(255,Math.floor(b*1.3))})`;
+      offCtx.lineWidth = 1; offCtx.stroke();
+    }
+
+    // Health bar above
+    const hp = project3D(this.x, this.y + 45, this.z, cx, cy, cz, cp, cyw, cr, sw, sh);
+    if (hp) {
+      const bw = 55, bh = 7, hw = Math.floor(this.health / 100 * bw);
+      offCtx.fillStyle = RED; offCtx.fillRect(hp[0] - bw / 2, hp[1], bw, bh);
+      offCtx.fillStyle = GREEN; offCtx.fillRect(hp[0] - bw / 2, hp[1], hw, bh);
+    }
+  }
+}
+
+class Missile3D {
+  constructor(x, y, z, pitch, yaw, speed, oid) {
+    this.x = x; this.y = y; this.z = z;
+    this.pitch = pitch; this.yaw = yaw;
+    this.speed = speed + 14; this.ownerId = oid; this.life = 200;
+  }
+  update(tgt) {
+    if (tgt) {
+      const dx = tgt.x - this.x, dy = tgt.y - this.y, dz = tgt.z - this.z;
+      const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+      if (d > 0) {
+        const ty = Math.atan2(dx, dz);
+        let df = ((ty - this.yaw + Math.PI) % (2 * Math.PI)) - Math.PI;
+        if (df < -Math.PI) df += 2 * Math.PI;
+        this.yaw += 0.04 * Math.sign(df);
+        const hd = Math.sqrt(dx * dx + dz * dz);
+        const tp = hd > 0 ? Math.atan2(dy, hd) : 0;
+        const pd = tp - this.pitch;
+        this.pitch += 0.04 * Math.sign(pd);
+      }
+    }
+    this.x += this.speed * Math.sin(this.yaw) * Math.cos(this.pitch);
+    this.y += this.speed * Math.sin(this.pitch);
+    this.z += this.speed * Math.cos(this.yaw) * Math.cos(this.pitch);
+    this.life--;
+  }
+  draw(offCtx, cx, cy, cz, cp, cyw, cr, sw, sh) {
+    const p = project3D(this.x, this.y, this.z, cx, cy, cz, cp, cyw, cr, sw, sh);
+    if (p) {
+      const col = this.ownerId === 1 ? B_BLUE : B_RED;
+      const r = Math.max(3, Math.floor(6 * p[2]));
+      offCtx.fillStyle = col;
+      offCtx.beginPath(); offCtx.arc(p[0], p[1], r, 0, Math.PI * 2); offCtx.fill();
+      offCtx.fillStyle = ORANGE;
+      offCtx.beginPath(); offCtx.arc(p[0], p[1], r / 2, 0, Math.PI * 2); offCtx.fill();
+    }
+  }
+  hit(j) { return Math.sqrt((this.x - j.x) ** 2 + (this.y - j.y) ** 2 + (this.z - j.z) ** 2) < 45; }
+}
+
+class Bullet3D {
+  constructor(x, y, z, pitch, yaw, speed, oid) {
+    this.x = x; this.y = y; this.z = z;
+    this.pitch = pitch; this.yaw = yaw;
+    this.speed = speed + 28; this.ownerId = oid; this.life = 55;
+  }
+  update() {
+    this.x += this.speed * Math.sin(this.yaw) * Math.cos(this.pitch);
+    this.y += this.speed * Math.sin(this.pitch);
+    this.z += this.speed * Math.cos(this.yaw) * Math.cos(this.pitch);
+    this.life--;
+  }
+  draw(offCtx, cx, cy, cz, cp, cyw, cr, sw, sh) {
+    const p = project3D(this.x, this.y, this.z, cx, cy, cz, cp, cyw, cr, sw, sh);
+    if (p) {
+      const col = this.ownerId === 1 ? CYAN : YELLOW;
+      const r = Math.max(2, Math.floor(4 * p[2]));
+      offCtx.fillStyle = col;
+      offCtx.beginPath(); offCtx.arc(p[0], p[1], r, 0, Math.PI * 2); offCtx.fill();
+    }
+  }
+  hit(j) { return Math.sqrt((this.x - j.x) ** 2 + (this.y - j.y) ** 2 + (this.z - j.z) ** 2) < 38; }
+}
+
+class Explosion3D {
+  constructor(x, y, z) { this.x = x; this.y = y; this.z = z; this.frame = 0; }
+  update() { this.frame++; }
+  draw(offCtx, cx, cy, cz, cp, cyw, cr, sw, sh) {
+    if (this.frame < 30) {
+      const p = project3D(this.x, this.y, this.z, cx, cy, cz, cp, cyw, cr, sw, sh);
+      if (p) {
+        const r = Math.max(1, Math.floor(this.frame * 3 * p[2]));
+        const g = Math.max(0, 200 - this.frame * 6);
+        offCtx.strokeStyle = `rgb(255,${g},0)`; offCtx.lineWidth = 3;
+        offCtx.beginPath(); offCtx.arc(p[0], p[1], r, 0, Math.PI * 2); offCtx.stroke();
+      }
+    }
+  }
+}
+
+// Offscreen canvases for split view
+let offCanvas1, offCtx1, offCanvas2, offCtx2, fullCanvas, fullCtx;
+
+function init3D() {
+  offCanvas1 = document.createElement('canvas');
+  offCanvas1.width = HALF_W; offCanvas1.height = HEIGHT;
+  offCtx1 = offCanvas1.getContext('2d');
+
+  offCanvas2 = document.createElement('canvas');
+  offCanvas2.width = HALF_W; offCanvas2.height = HEIGHT;
+  offCtx2 = offCanvas2.getContext('2d');
+
+  fullCanvas = document.createElement('canvas');
+  fullCanvas.width = WIDTH; fullCanvas.height = HEIGHT;
+  fullCtx = fullCanvas.getContext('2d');
+
+  game3D = {
+    state: 'menu', // menu, single, multi
+    modeSel: 0, goSel: 0,
+    p1: null, p2: null,
+    missiles: [], bullets: [], explosions: [],
+    winner: null
+  };
+}
+
+function start3D(mode) {
+  game3D.p1 = new Jet3D(-600, 200, 0, B_BLUE, 1);
+  game3D.p2 = new Jet3D(600, 200, 0, B_RED, 2);
+  game3D.missiles = []; game3D.bullets = []; game3D.explosions = [];
+  game3D.winner = null; game3D.state = mode;
+  if (mode === 'single') {
+    canvas.requestPointerLock();
+    pointerLocked = true;
+  } else {
+    if (document.pointerLockElement) document.exitPointerLock();
+    pointerLocked = false;
+  }
+}
+
+function ai3D(ai, tgt) {
+  const g = game3D;
+  const dx = tgt.x - ai.x, dy = tgt.y - ai.y, dz = tgt.z - ai.z;
+  const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  if (d > 0) {
+    const ty = Math.atan2(dx, dz);
+    let yd = ((ty - ai.yaw + Math.PI) % (2 * Math.PI)) - Math.PI;
+    if (yd < -Math.PI) yd += 2 * Math.PI;
+    ai.yaw += 0.03 * Math.sign(yd);
+    const hd = Math.sqrt(dx * dx + dz * dz);
+    const tp = hd > 0 ? Math.atan2(dy, hd) : 0;
+    const pd = tp - ai.pitch;
+    ai.pitch += 0.03 * Math.sign(pd);
+    ai.speed = d > 400 ? Math.min(ai.speed + 0.1, 14) : Math.max(ai.speed - 0.1, 6);
+  }
+  ai._move();
+  const ye = Math.abs(((Math.atan2(dx, dz) - ai.yaw + Math.PI) % (2 * Math.PI)) - Math.PI);
+  if (d < 700 && ye < 0.25 && Math.random() < 0.018) {
+    const m = ai.fireMissile(); if (m) g.missiles.push(m);
+  } else if (d < 450 && ye < 0.18 && Math.random() < 0.08) {
+    const b = ai.fireGun(); if (b) g.bullets.push(b);
+  }
+}
+
+function combat3D() {
+  const g = game3D;
+  let winner = null;
+  g.missiles = g.missiles.filter(ms => {
+    const tgt = ms.ownerId === 1 ? g.p2 : g.p1;
+    ms.update(tgt);
+    if (ms.life <= 0) return false;
+    if (ms.hit(tgt)) {
+      tgt.health -= 35; g.explosions.push(new Explosion3D(ms.x, ms.y, ms.z));
+      if (tgt.health <= 0) winner = ms.ownerId;
+      return false;
+    }
+    return true;
+  });
+  g.bullets = g.bullets.filter(bl => {
+    bl.update();
+    const tgt = bl.ownerId === 1 ? g.p2 : g.p1;
+    if (bl.life <= 0) return false;
+    if (bl.hit(tgt)) {
+      tgt.health -= 5;
+      if (tgt.health <= 0) winner = bl.ownerId;
+      return false;
+    }
+    return true;
+  });
+  g.explosions = g.explosions.filter(ex => { ex.update(); return ex.frame < 30; });
+  return winner;
+}
+
+function drawHUD3D(offCtx, jet, side, sw, sh) {
+  const items = [
+    [`HP:  ${jet.health}`, jet.health > 50 ? GREEN : RED],
+    [`SPD: ${Math.floor(jet.speed * 10)}`, WHITE],
+    [`ALT: ${Math.floor(jet.y)}`, WHITE],
+    [`MSL: ${jet.missiles}`, WHITE],
+    [`GUN: ${jet.gunAmmo}`, WHITE]
+  ];
+  for (let i = 0; i < items.length; i++) {
+    offCtx.fillStyle = items[i][1];
+    offCtx.font = 'bold 26px sans-serif'; offCtx.textAlign = 'left'; offCtx.textBaseline = 'top';
+    offCtx.fillText(items[i][0], 8, 8 + i * 28);
+  }
+  // Controls
+  const ctrls = side === 1
+    ? ['W/S: Pitch', 'A/D: Yaw', 'LShift/LCtrl: Speed', 'Q: Missile', 'E: Gun']
+    : ['↑/↓: Pitch', '←/→: Yaw', 'RShift/RCtrl: Speed', '. : Missile', '/ : Gun'];
+  offCtx.font = 'bold 20px sans-serif'; offCtx.fillStyle = GRAY;
+  let y = sh - ctrls.length * 22 - 6;
+  for (const t of ctrls) { offCtx.fillText(t, 8, y); y += 22; }
+  // Crosshair
+  const cw = sw / 2, ch = sh / 2;
+  offCtx.strokeStyle = GREEN; offCtx.lineWidth = 2;
+  offCtx.beginPath(); offCtx.arc(cw, ch, 18, 0, Math.PI * 2); offCtx.stroke();
+  offCtx.beginPath(); offCtx.moveTo(cw - 23, ch); offCtx.lineTo(cw + 23, ch); offCtx.stroke();
+  offCtx.beginPath(); offCtx.moveTo(cw, ch - 23); offCtx.lineTo(cw, ch + 23); offCtx.stroke();
+}
+
+function draw3DMenu() {
+  ctx.fillStyle = DARK; ctx.fillRect(0, 0, WIDTH, HEIGHT);
+  const t = now();
+  for (let i = 0; i < WIDTH; i += 80) {
+    const a = Math.floor(40 + 20 * Math.sin(t + i * 0.05));
+    ctx.strokeStyle = `rgb(0,${a},${a})`; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, HEIGHT); ctx.stroke();
+  }
+  for (let j = 0; j < HEIGHT; j += 80) {
+    const a = Math.floor(40 + 20 * Math.sin(t + j * 0.05));
+    ctx.strokeStyle = `rgb(0,${a},${a})`;
+    ctx.beginPath(); ctx.moveTo(0, j); ctx.lineTo(WIDTH, j); ctx.stroke();
+  }
+  drawText('3D JET SIMULATOR', WIDTH / 2, 160, CYAN, 96, 'center', 'middle');
+  drawText('Choose Mode', WIDTH / 2, 240, GRAY, 44, 'center', 'middle');
+
+  const g = game3D;
+  const sp = { x: WIDTH / 2 - 280, y: 330, w: 560, h: 100 };
+  const mp = { x: WIDTH / 2 - 280, y: 480, w: 560, h: 100 };
+
+  // Single player button
+  const selSP = g.modeSel === 0;
+  const hovSP = rectContains(sp.x, sp.y, sp.w, sp.h, mouse.x, mouse.y);
+  drawRoundRect(sp.x, sp.y, sp.w, sp.h, 14,
+    (selSP || hovSP) ? 'rgb(0,160,80)' : 'rgb(0,100,50)',
+    selSP ? YELLOW : (hovSP ? CYAN : GREEN), selSP ? 4 : 3);
+  drawText('SINGLE PLAYER', WIDTH / 2, 365, WHITE, 52, 'center', 'middle');
+  drawText('You vs AI  |  Mouse to Fly  |  L-Click=Gun  R-Click=Missile', WIDTH / 2, 408, GRAY, 26, 'center', 'middle');
+  if (selSP) drawText('▶', sp.x - 35, sp.y + 50, YELLOW, 52, 'center', 'middle');
+
+  // Multiplayer button
+  const selMP = g.modeSel === 1;
+  const hovMP = rectContains(mp.x, mp.y, mp.w, mp.h, mouse.x, mouse.y);
+  drawRoundRect(mp.x, mp.y, mp.w, mp.h, 14,
+    (selMP || hovMP) ? 'rgb(0,80,200)' : 'rgb(0,40,130)',
+    selMP ? YELLOW : (hovMP ? CYAN : BLUE), selMP ? 4 : 3);
+  drawText('MULTIPLAYER', WIDTH / 2, 515, WHITE, 52, 'center', 'middle');
+  drawText('Split Screen  |  P1: WASD+QE  |  P2: Arrows + / . keys', WIDTH / 2, 558, GRAY, 26, 'center', 'middle');
+  if (selMP) drawText('▶', mp.x - 35, mp.y + 50, YELLOW, 52, 'center', 'middle');
+
+  drawText('↑ ↓ Arrow Keys  |  ENTER  |  ESC = Back to Home', WIDTH / 2, HEIGHT - 30, '#666', 24, 'center', 'middle');
+
+  for (const click of clickEvents) {
+    if (rectContains(sp.x, sp.y, sp.w, sp.h, click.x, click.y)) start3D('single');
+    if (rectContains(mp.x, mp.y, mp.w, mp.h, click.x, click.y)) start3D('multi');
+  }
+}
+
+function draw3DGameOver() {
+  const g = game3D;
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  if (g.state === 'single') {
+    const win = g.winner === 1;
+    drawText(win ? 'VICTORY!' : 'DEFEATED!', WIDTH / 2, HEIGHT / 2 - 80,
+      win ? GREEN : RED, 110, 'center', 'middle');
+    drawText(win ? 'Enemy AI Destroyed!' : 'You Were Shot Down', WIDTH / 2, HEIGHT / 2,
+      WHITE, 48, 'center', 'middle');
+  } else {
+    const col = g.winner === 1 ? B_BLUE : B_RED;
+    drawText(`PLAYER ${g.winner} WINS!`, WIDTH / 2, HEIGHT / 2 - 80, col, 110, 'center', 'middle');
+    drawText(g.winner === 1 ? 'Player 2 Shot Down!' : 'Player 1 Shot Down!', WIDTH / 2, HEIGHT / 2,
+      WHITE, 48, 'center', 'middle');
+  }
+
+  const rb = { x: WIDTH / 2 - 310, y: HEIGHT / 2 + 80, w: 260, h: 65 };
+  const mb = { x: WIDTH / 2 + 50, y: HEIGHT / 2 + 80, w: 260, h: 65 };
+
+  for (const [idx, btn, label, baseCol, hiCol] of [
+    [0, rb, 'RESTART', 'rgb(0,120,0)', GREEN],
+    [1, mb, 'MENU', 'rgb(0,0,130)', B_BLUE]
+  ]) {
+    const sel = g.goSel === idx;
+    const hov = rectContains(btn.x, btn.y, btn.w, btn.h, mouse.x, mouse.y);
+    drawRoundRect(btn.x, btn.y, btn.w, btn.h, 10,
+      (sel || hov) ? hiCol : baseCol, sel ? YELLOW : WHITE, sel ? 4 : 2);
+    drawText(label, btn.x + btn.w / 2, btn.y + btn.h / 2, WHITE, 44, 'center', 'middle');
+    if (sel) drawText('▶', btn.x - 25, btn.y + btn.h / 2, YELLOW, 44, 'center', 'middle');
+  }
+  drawText('← → Arrow Keys  |  ENTER to confirm', WIDTH / 2, HEIGHT / 2 + 175, GRAY, 24, 'center', 'middle');
+
+  for (const click of clickEvents) {
+    if (rectContains(rb.x, rb.y, rb.w, rb.h, click.x, click.y)) start3D(g.state);
+    if (rectContains(mb.x, mb.y, mb.w, mb.h, click.x, click.y)) {
+      g.state = 'menu'; g.winner = null;
+      document.exitPointerLock(); pointerLocked = false;
+    }
+  }
+}
+
+function renderView(offCtx, cam, other, sw, sh) {
+  offCtx.fillStyle = DARK; offCtx.fillRect(0, 0, sw, sh);
+  drawArena(offCtx, cam.x, cam.y, cam.z, cam.pitch, cam.yaw, cam.roll, sw, sh);
+  const g = game3D;
+  for (const ex of g.explosions) ex.draw(offCtx, cam.x, cam.y, cam.z, cam.pitch, cam.yaw, cam.roll, sw, sh);
+  for (const ms of g.missiles) ms.draw(offCtx, cam.x, cam.y, cam.z, cam.pitch, cam.yaw, cam.roll, sw, sh);
+  for (const bl of g.bullets) bl.draw(offCtx, cam.x, cam.y, cam.z, cam.pitch, cam.yaw, cam.roll, sw, sh);
+  other.draw(offCtx, cam.x, cam.y, cam.z, cam.pitch, cam.yaw, cam.roll, sw, sh);
+}
+
+function update3D() {
+  const g = game3D;
+
+  if (g.state === 'menu') { draw3DMenu(); return; }
+
+  const mdx = mouse.dx; const mdy = mouse.dy;
+  mouse.dx = 0; mouse.dy = 0;
+
+  if (!g.winner) {
+    if (g.state === 'single') {
+      g.p1.updateMouse(mdx, mdy);
+      ai3D(g.p2, g.p1);
+    } else {
+      g.p1.updateP1();
+      g.p2.updateP2Keys();
+    }
+    const w = combat3D();
+    if (w) { g.winner = w; g.goSel = 0; }
+  }
+
+  if (g.state === 'single') {
+    renderView(fullCtx, g.p1, g.p2, WIDTH, HEIGHT);
+    fullCtx.fillStyle = B_BLUE; fullCtx.font = 'bold 32px sans-serif';
+    fullCtx.textAlign = 'center'; fullCtx.fillText('SINGLE PLAYER', WIDTH / 2, 24);
+    drawHUD3D(fullCtx, g.p1, 2, WIDTH, HEIGHT);
+    fullCtx.fillStyle = B_RED; fullCtx.font = 'bold 30px sans-serif';
+    fullCtx.textAlign = 'right';
+    fullCtx.fillText(`ENEMY HP: ${Math.max(0, g.p2.health)}`, WIDTH - 12, 24);
+    ctx.drawImage(fullCanvas, 0, 0);
+  } else {
+    renderView(offCtx1, g.p1, g.p2, HALF_W, HEIGHT);
+    offCtx1.fillStyle = B_BLUE; offCtx1.font = 'bold 32px sans-serif';
+    offCtx1.textAlign = 'center'; offCtx1.fillText('PLAYER 1', HALF_W / 2, 24);
+    drawHUD3D(offCtx1, g.p1, 1, HALF_W, HEIGHT);
+
+    renderView(offCtx2, g.p2, g.p1, HALF_W, HEIGHT);
+    offCtx2.fillStyle = B_RED; offCtx2.font = 'bold 32px sans-serif';
+    offCtx2.textAlign = 'center'; offCtx2.fillText('PLAYER 2', HALF_W / 2, 24);
+    drawHUD3D(offCtx2, g.p2, 2, HALF_W, HEIGHT);
+
+    ctx.drawImage(offCanvas1, 0, 0);
+    ctx.drawImage(offCanvas2, HALF_W, 0);
+    ctx.strokeStyle = WHITE; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(HALF_W, 0); ctx.lineTo(HALF_W, HEIGHT); ctx.stroke();
+  }
+
+  if (g.winner) draw3DGameOver();
+}
+
+function handle3DKeys(code) {
+  const g = game3D;
+  if (g.state === 'menu') {
+    if (code === 'ArrowUp' || code === 'ArrowDown') g.modeSel = 1 - g.modeSel;
+    if (code === 'Enter' || code === 'NumpadEnter') start3D(g.modeSel === 0 ? 'single' : 'multi');
+    if (code === 'Escape') {
+      gameState = 'home';
+      document.exitPointerLock(); pointerLocked = false;
+    }
+  } else if (g.winner !== null) {
+    if (code === 'ArrowLeft' || code === 'ArrowRight') g.goSel = 1 - g.goSel;
+    if (code === 'Enter' || code === 'NumpadEnter') {
+      if (g.goSel === 0) start3D(g.state);
+      else { g.state = 'menu'; g.winner = null; document.exitPointerLock(); pointerLocked = false; }
+    }
+    if (code === 'Escape') {
+      g.state = 'menu'; g.winner = null;
+      document.exitPointerLock(); pointerLocked = false;
+    }
+  } else {
+    if (code === 'Escape') {
+      g.state = 'menu'; g.winner = null;
+      document.exitPointerLock(); pointerLocked = false;
+    }
+    if (g.state === 'multi' && !g.winner) {
+      if (code === 'KeyQ') { const m = g.p1.fireMissile(); if (m) g.missiles.push(m); }
+      if (code === 'KeyE') { const b = g.p1.fireGun(); if (b) g.bullets.push(b); }
+      if (code === 'Period' || code === 'Numpad2') { const m = g.p2.fireMissile(); if (m) g.missiles.push(m); }
+      if (code === 'Slash' || code === 'Numpad1') { const b = g.p2.fireGun(); if (b) g.bullets.push(b); }
+    }
+  }
+}
+
+function handle3DMouseDown(button) {
+  const g = game3D;
+  if (g.state === 'single' && !g.winner) {
+    if (button === 0) { const b = g.p1.fireGun(); if (b) g.bullets.push(b); }
+    if (button === 2) { const m = g.p1.fireMissile(); if (m) g.missiles.push(m); }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  KEY DISPATCH
+// ═══════════════════════════════════════════════════════════════════
+document.addEventListener('keydown', e => {
+  if (gameState === 'home') handleHomeKeys(e.code);
+  else if (gameState === '2d') handle2DKeys(e.code);
+  else if (gameState === '3d') handle3DKeys(e.code);
+});
+
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = !!document.pointerLockElement;
+});
+
+// ═══════════════════════════════════════════════════════════════════
+//  MAIN LOOP
+// ═══════════════════════════════════════════════════════════════════
+function gameLoop() {
+  clickEvents.length = 0; // clear at start... no, we need them during draw
+
+  if (gameState === 'home') drawHomeScreen();
+  else if (gameState === '2d') update2D();
+  else if (gameState === '3d') update3D();
+
+  clickEvents.length = 0;
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
+</body>
+</html>
