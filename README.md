@@ -41,7 +41,7 @@ First-person 3D flight with full pitch, yaw, and roll controls. Battle it out in
 
 Simply open `index.html` in any modern browser. No server needed.
 
-**Live Demo:** [https://yourusername.github.io/jet-simulator](https://yourusername.github.io/jet-simulator)
+**Live Demo:** [https://iamthetruth916.github.io/jet-simulator](https://iamthetruth916.github.io/jet-simulator)
 
 ## 📁 Setup
 
